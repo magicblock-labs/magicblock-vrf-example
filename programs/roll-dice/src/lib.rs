@@ -27,12 +27,22 @@ pub mod random_dice {
             callback_program_id: ID,
             callback_discriminator: instruction::CallbackRollDice::DISCRIMINATOR.to_vec(),
             caller_seed: [client_seed; 32],
-            // Specify any account that is required by the callback
-            accounts_metas: Some(vec![SerializableAccountMeta {
-                pubkey: ctx.accounts.player.key(),
-                is_signer: false,
-                is_writable: true,
-            }]),
+            // Specify any account that is required by the callback. The first entry
+            // must be the requesting player's wallet so the callback can pin the
+            // player PDA to its seed; without it the callback would accept any
+            // player account and let anyone overwrite arbitrary game state.
+            accounts_metas: Some(vec![
+                SerializableAccountMeta {
+                    pubkey: ctx.accounts.payer.key(),
+                    is_signer: false,
+                    is_writable: false,
+                },
+                SerializableAccountMeta {
+                    pubkey: ctx.accounts.player.key(),
+                    is_signer: false,
+                    is_writable: true,
+                },
+            ]),
             ..Default::default()
         });
         ctx.accounts
@@ -58,14 +68,14 @@ pub mod random_dice {
             (3, "Priest")
         };
 
-        // Generate a random u32 
-        let stats_roll = ephemeral_vrf_sdk::rnd::random_u32(&randomness)
+        // Generate a random u32
+        let stats_roll = ephemeral_vrf_sdk::rnd::random_u32(&randomness);
         msg!("Stats roll: {}", stats_roll);
 
-        // Split the 6-digit number into three 2-digit numbers. There's slight modulo bias, but yolo. 
-        let atk = ((stats_roll >> 0)  & 0x3FF) % 100; as u8;
-        let def = ((stats_roll >> 10)  & 0x3FF) % 100; as u8;
-        let dex = ((stats_roll >> 20)  & 0x3FF) % 100; as u8;
+        // Split the 6-digit number into three 2-digit numbers. There's slight modulo bias, but yolo.
+        let atk = (((stats_roll >> 0) & 0x3FF) % 100) as u8;
+        let def = (((stats_roll >> 10) & 0x3FF) % 100) as u8;
+        let dex = (((stats_roll >> 20) & 0x3FF) % 100) as u8;
 
         // Log character details
         msg!("Class: {}, ATK: {}, DEF: {}, DEX: {}", class_name, atk, def, dex);
@@ -107,7 +117,14 @@ pub struct CallbackRollDiceCtx<'info> {
     /// enforcing the callback is executed by the VRF program trough CPI
     #[account(address = ephemeral_vrf_sdk::consts::VRF_PROGRAM_IDENTITY)]
     pub vrf_program_identity: Signer<'info>,
-    #[account(mut)]
+    /// The requesting player's wallet, used to pin the player PDA below. Constrained
+    /// by the player seed to match the payer supplied in the randomness request.
+    pub payer: UncheckedAccount<'info>,
+    #[account(
+        mut,
+        seeds = [PLAYER, payer.key().to_bytes().as_slice()],
+        bump
+    )]
     pub player: Account<'info, Player>,
 }
 
